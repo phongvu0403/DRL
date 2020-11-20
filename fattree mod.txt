@@ -1,0 +1,221 @@
+/*********************************************
+ * OPL 12.10.0.0 Model
+ * Author: nfvteam
+ * Creation Date: Aug 4, 2020 at 1:22:15 PM
+ *********************************************/
+using CP;
+int nNodes = 16;
+int nSFCInput = 16;
+int nVNF = 4;
+int nBWVM = nVNF - 1;
+int Device = 2;
+float cpuCap = 100;
+float capBW = 100;
+
+range VNFs = 1 .. nVNF;
+range Nodes = 1 .. nNodes;
+range SFCInput = 1 .. nSFCInput;
+range nBWVMs = 1..nBWVM;
+range Devices = 1 .. Device;
+
+ tuple link{
+   string org;
+   string des;
+ }
+ 
+ {link} Links = ...;
+ {string} EdgeSwitches = ...;
+ {string} SwitchNodes = ...;
+ {string} Servers = ...;
+ {string} EdgeDevs = ...;
+ {string} Nodetype1 =...;
+ {string} Nodetype2 =...;
+ {string} GW = ...;
+ 
+ float vnfCPU[Devices][VNFs];
+ float bwVM[nBWVMs];
+
+ 
+ execute INITIALIZE {
+   writeln("Initialize cpu demand ...");
+   
+	for(var k in nBWVMs){ // initiate BW for each Virtual Link
+		if(k == 1){
+			bwVM[k] = 46.32;
+		}
+		else if(k == 2){
+			bwVM[k] = 16.32;
+		}
+		else if(k == 3){
+			bwVM[k] = 0.6;
+		}
+		else{
+		  writeln("Link bandwidth initiation gets overflow.");
+		}
+	}	
+ 
+	for(var i in Devices){
+		if(i == 1){ // 
+			for(var j in VNFs){ // Edge CPU usage
+				if(j == 1){
+					vnfCPU[i][j] = 3;
+				}
+				else if(j == 2){
+					vnfCPU[i][j] = 8;
+				}
+				else if(j == 3){
+					vnfCPU[i][j] = 13.6;
+				}
+				else if(j == 4){
+					vnfCPU[i][j] = 0;
+				}
+				else{
+					writeln("CPU initiation gets overflow.");
+				} 
+			}       
+		}
+		else if (i == 2){ // Server CPU usage
+			for(var j in VNFs){ 
+				if(j == 1){
+					vnfCPU[i][j] = 0;
+				}
+				else if(j == 2){
+					vnfCPU[i][j] = 1.5;
+				}
+				else if(j == 3){
+					vnfCPU[i][j] = 6.5;
+				}
+				else if(j == 4){
+					vnfCPU[i][j] = 5;
+				}
+				else{
+					writeln("CPU initiation gets overflow.");
+				} 
+			}       
+		}
+		else{
+ 			writeln("Device gets overflow.");
+		}
+	}
+ 
+        			
+	                        			         					
+}
+
+dvar int VNFsuccessSer[SFCInput][VNFs][Servers] in 0..1; // indicate binary variable
+dvar int VNFsuccessEdge[SFCInput][VNFs][EdgeDevs] in 0..1; // indicate binary variable
+dvar int m[SFCInput][nBWVMs] in 0..1;	
+dexpr int AcceptedSFC = sum(i in SFCInput) (prod(j in VNFs) ((sum(s in Servers) VNFsuccessSer[i][j][s]
+						+ sum(ed in EdgeDevs) VNFsuccessEdge[i][j][ed]) * m[i][j]));						
+						
+dvar int x[SFCInput][nBWVMs][Links] in 0..1;
+ 
+maximize AcceptedSFC;
+
+subject to {
+    /**CPU constraints***/   
+ forall(i in SFCInput) // prevent 1 VNF is mapped multiple times in servers
+    forall(j in VNFs)
+      sum(s in Servers) VNFsuccessSer[i][j][s] <= 1; 
+ 
+ forall(i in SFCInput) // prevent 1 VNF is mapped multiple times in edge devices
+    forall(j in VNFs)
+      sum(ed in EdgeDevs) VNFsuccessEdge[i][j][ed] <= 1;      
+ 
+ forall(s in Servers) // CPU of Server capacity
+	sum(i in SFCInput)
+		sum(j in VNFs) VNFsuccessSer[i][j][s]*vnfCPU[2][j] <= cpuCap; 
+ 
+ forall(ed in EdgeDevs) // CPU of Edge device capacity
+	sum(i in SFCInput)
+		sum(j in VNFs) VNFsuccessEdge[i][j][ed]*vnfCPU[1][j] <= cpuCap; // CPU of node capacity
+ 
+ forall(i in SFCInput)
+   forall(j in VNFs) // prevent VNF is mapped at both tier
+    sum(s in Servers)(VNFsuccessSer[i][j][s]) * sum(ed in EdgeDevs) (VNFsuccessEdge[i][j][ed]) == 0;
+ 
+ forall(i in SFCInput) // test constraint
+   forall(j in VNFs)
+     sum(s in Servers) VNFsuccessSer[i][j][s] + sum(ed in EdgeDevs) VNFsuccessEdge[i][j][ed] <= 1;
+ 
+ forall(i in SFCInput)
+   forall(s in Servers) // VNF 1 cannot stay at Server
+    VNFsuccessSer[i][1][s] == 0;
+ 
+ forall(i in SFCInput)
+   forall(ed in EdgeDevs) // VNF 4 cannot stay at Edge
+    VNFsuccessEdge[i][4][ed] == 0;
+ 
+ forall(i in SFCInput) // VNFs belong an SFC if stay at Edge must stay within 1 edge device only
+ 	sum(ed in EdgeDevs) sum(j in VNFs)	(VNFsuccessEdge[i][j][ed]) -
+ 	sum(ed in EdgeDevs) sum(j in VNFs) (VNFsuccessEdge[i][j][ed] * VNFsuccessEdge[i][1][ed]) <= 0;
+ 
+ 
+	/**Link constraints**/
+ 
+ 
+ forall(i in SFCInput, j in VNFs: j <= nBWVM, s in Servers) // link occurs between a pair of VNFs j; j+ 1
+  forall(l in Links: l.org == s) 
+    x[i][j][l] == VNFsuccessSer[i][j][s]*(1 - VNFsuccessSer[i][j+1][s]);
+ 
+ forall(i in SFCInput, j in VNFs: j <= nBWVM, s in Servers) // link occurs between a pair of VNFs j+1; j
+  forall(l in Links: l.des == s) 
+    x[i][j][l] == VNFsuccessSer[i][j + 1][s]*(1 - VNFsuccessSer[i][j][s]);
+    
+ forall(i in SFCInput, j in VNFs: j <= nBWVM, ed in EdgeDevs) // link occurs between edge & server
+	forall(l in Links: l.org == ed)
+	  x[i][j][l] == VNFsuccessEdge[i][j][ed] * (1- VNFsuccessEdge[i][j+1][ed]);
+
+
+  forall(i in SFCInput) // unsplitable connection
+    forall(j in nBWVMs)
+      forall(n in SwitchNodes)
+    	sum(l in Links: n == l.org) x[i][j][l] - sum(l in Links: n == l.des) x[i][j][l] == 0;
+  
+  forall(i in SFCInput) // two identical links cannot equal 1
+    forall(j in nBWVMs)
+      forall(l1 in Links, l2 in Links: l1.des == l2.org && l1.org == l2.des)
+        x[i][j][l1]*x[i][j][l2] == 0;
+        
+  forall(l1 in Links, l2 in Links: l1.des == l2.org && l1.org == l2.des) // cap bandwidth of link l cannot be exceeded
+    sum(i in SFCInput, j in nBWVMs)
+      (x[i][j][l1] + x[i][j][l2])*bwVM[j] <= capBW;
+  
+  forall(i in SFCInput, j in nBWVMs) // prevent looping stage 1
+	forall(e1 in SwitchNodes, e2 in Nodetype1)
+	  sum(l in Links: l.des == e2 && l.org == e1) x[i][j][l] <= 1;
+	  
+   forall(i in SFCInput, j in nBWVMs) // prevent looping stage 1
+	forall(e1 in Nodetype1, e2 in Nodetype2)
+	  sum(l in Links: l.des == e2 && l.org == e1) x[i][j][l] <= 1;
+	  
+	  
+   forall(i in SFCInput, j in nBWVMs) // prevent looping stage 1
+	forall(e1 in SwitchNodes, e2 in Nodetype1)
+	  sum(l in Links: l.des == e1 && l.org == e2) x[i][j][l] <= 1;
+	  
+   forall(i in SFCInput, j in nBWVMs) // prevent looping stage 1
+	forall(e1 in Nodetype1, e2 in Nodetype2)
+	  sum(l in Links: l.des == e1 && l.org == e2) x[i][j][l] <= 1;  	  
+
+  forall(i in SFCInput) // prevent looping stage 2
+	forall(j in nBWVMs)
+	  forall(n in SwitchNodes)
+	    sum(l in Links: n == l.org) x[i][j][l] + sum(l in Links: n == l.des) x[i][j][l] <= 2;      
+
+
+  forall(i in SFCInput)
+    forall(j in nBWVMs)
+      forall(s in Servers, ed in EdgeDevs)
+        m[i][j] == VNFsuccessSer[i][j+1][s] + VNFsuccessEdge[i][j+1][ed]
+       		+ sum(s in Servers, l in Links: l.org == s)x[i][j][l]
+       		+ sum(ed in EdgeDevs, l in Links: l.org == ed)x[i][j][l];
+}
+
+main{
+   thisOplModel.generate();
+   var m = thisOplModel;
+   if(cp.solve()) {
+     writeln("Optimal solution has accepted sfc = ", m.AcceptedSFC.solutionValue);
+ 	}
+}
